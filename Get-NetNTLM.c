@@ -338,10 +338,10 @@ cleanup:
         SECUR32$FreeCredentialsHandle(&hCred);
     }
     if (IsCredHandleValid(&hClientContext)){
-        SECUR32$FreeCredentialsHandle(&hClientContext);
+        SECUR32$DeleteSecurityContext(&hClientContext);
     }
     if (IsCredHandleValid(&hServerContext)){
-        SECUR32$FreeCredentialsHandle(&hServerContext);
+        SECUR32$DeleteSecurityContext(&hServerContext);
     }
     if (ClientSecBuffer.pvBuffer != NULL) {
         MSVCRT$free(ClientSecBuffer.pvBuffer);
